@@ -12,6 +12,9 @@ let isGm = true;
 let inOwlbear = false;
 let activeTab: "roster" | "battle" | "spawn" = "roster";
 let templates: Combatant[] = loadTemplates();
+interface CustomToken { id: string; name: string; dataUrl: string; }
+const CUSTOM_TOKEN_KEY="ten-beak-custom-tokens-v1";
+let customTokens:CustomToken[]=JSON.parse(localStorage.getItem(CUSTOM_TOKEN_KEY)??"[]") as CustomToken[];
 
 const app = document.querySelector<HTMLElement>("#app")!;
 const esc = (value: unknown) => String(value).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]!);
@@ -19,7 +22,9 @@ const heroes = () => state.combatants.filter((c) => c.category === "hero" || c.c
 const enemies = () => state.combatants.filter((c) => !["hero", "ally"].includes(c.category));
 const byId = (id: string) => state.combatants.find((c) => c.id === id);
 const log = (message: string) => state.log.push(message);
-const tokenUrl = (token: string) => new URL(`tokens/${token}.svg`, window.location.href).toString();
+const tokenUrl = (token: string) => token.startsWith("custom:")
+  ? customTokens.find((item)=>item.id===token.slice(7))?.dataUrl ?? new URL("tokens/knight.svg",window.location.href).toString()
+  : new URL(`tokens/${token}.svg`, window.location.href).toString();
 
 async function commit(): Promise<void> {
   await saveState(state, inOwlbear);
@@ -79,7 +84,8 @@ function spawnView(): string {
       <label>Name<input name="name" required maxlength="40" placeholder="King Earnur"></label>
       <div class="row"><label>Type<select name="category"><option value="hero">Hero</option><option value="ally">Ally</option><option value="enemy">Enemy — 50 gold</option><option value="army">Army — 150 gold</option><option value="miniBoss">Mini-boss — 300 gold</option><option value="phantome">Calamity Phantomé — ends game</option></select></label>
       <label>Max HP <small id="hp-rule">Heroes: 200–300</small><input name="hp" required type="number" min="200" max="300" value="250"></label></div>
-      <label>Choose a pictured token</label><div class="token-picker">${["knight","dwarf","mage","beast","skull","crown"].map((t,i)=>`<label><input type="radio" name="token" value="${t}" ${i===0?"checked":""}><img src="${tokenUrl(t)}" alt="${t}"><span>${t}</span></label>`).join("")}</div>
+      <label>Choose a pictured token</label><div class="token-picker">${["knight","dwarf","mage","beast","skull","crown"].map((t,i)=>`<label><input type="radio" name="token" value="${t}" ${i===0?"checked":""}><img src="${tokenUrl(t)}" alt="${t}"><span>${t}</span></label>`).join("")}${customTokens.map(t=>`<label><input type="radio" name="token" value="custom:${t.id}"><img src="${t.dataUrl}" alt="${esc(t.name)}"><span>${esc(t.name)}</span></label>`).join("")}</div>
+      <label class="upload-token">Upload a reusable PNG or JPG token<input id="token-upload" type="file" accept="image/png,image/jpeg,image/webp"></label>
       <div class="row"><label>How many?<input name="count" type="number" min="1" max="12" value="1"></label><label>Starting gold<input name="gold" type="number" min="0" value="300"></label></div>
       <details><summary id="ability-summary">Starting attacks / abilities (optional, max 3)</summary>
         ${[1,2,3,4].map((n) => `<fieldset class="ability"><legend>Attack / Ability ${n}</legend><input name="ability${n}" placeholder="Name"><input name="faces${n}" placeholder="Successful action-die faces, e.g. 2,4"><select name="damageMode${n}"><option value="normal">Roll damage die (10–100)</option><option value="double">Double the damage die (max 200)</option><option value="fixed">Fixed damage</option><option value="support">No damage / support ability</option></select><input name="max${n}" type="number" min="0" max="200" placeholder="Fixed or maximum damage"></fieldset>`).join("")}
@@ -111,6 +117,7 @@ function bind(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-manage]").forEach((b)=>b.onclick=()=>{const c=byId(b.dataset.manage!);if(c)editCombatant(c);});
   document.querySelectorAll<HTMLButtonElement>("[data-gold]").forEach((b)=>b.onclick=()=>{const c=byId(b.dataset.gold!);if(c)awardGold(c);});
   document.querySelector<HTMLSelectElement>('#creator select[name="category"]')?.addEventListener("change", configureCreator);
+  document.querySelector<HTMLInputElement>("#token-upload")?.addEventListener("change", uploadToken);
 }
 
 async function applyDamage(amount: number): Promise<void> {
@@ -165,10 +172,32 @@ async function placeOnMap(combatants: Combatant[]): Promise<void> {
   if(!inOwlbear || !(await OBR.scene.isReady())) return;
   const [width,height]=await Promise.all([OBR.viewport.getWidth(),OBR.viewport.getHeight()]);
   const center=await OBR.viewport.inverseTransformPoint({x:width/2,y:height/2});
-  const items=combatants.map((c,index)=>buildImage({url:tokenUrl(c.token),mime:"image/svg+xml",width:256,height:256},{dpi:150,offset:{x:0,y:0}})
+  const pngs=await Promise.all(combatants.map(c=>imageToPng(tokenUrl(c.token))));
+  const items=combatants.map((c,index)=>buildImage({url:pngs[index],mime:"image/png",width:256,height:256},{dpi:150,offset:{x:0,y:0}})
     .name(c.name).layer("CHARACTER").position({x:center.x+(index%4)*180,y:center.y+Math.floor(index/4)*180})
     .metadata({"com.tenbeak.companion/combatantId":c.id,"com.tenbeak.companion/encounterId":c.encounterId}).build());
   await OBR.scene.items.addItems(items);
+}
+
+async function uploadToken(e:Event):Promise<void>{
+  const input=e.target as HTMLInputElement; const file=input.files?.[0]; if(!file)return;
+  if(file.size>8_000_000){alert("Please choose an image smaller than 8 MB.");return;}
+  try{
+    const dataUrl=await fileToSquarePng(file); const id=crypto.randomUUID();
+    customTokens.push({id,name:file.name.replace(/\.[^.]+$/,"").slice(0,24)||"Custom",dataUrl});
+    try{localStorage.setItem(CUSTOM_TOKEN_KEY,JSON.stringify(customTokens));}catch{customTokens=customTokens.filter(t=>t.id!==id);throw new Error("The saved token library is full. Try a smaller picture.");}
+    render();
+    requestAnimationFrame(()=>{const radio=document.querySelector<HTMLInputElement>(`input[name="token"][value="custom:${id}"]`);if(radio)radio.checked=true;});
+  }catch(error){alert((error as Error).message);}
+}
+
+function fileToSquarePng(file:File):Promise<string>{
+  return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error("That picture could not be read."));reader.onload=()=>{const img=new Image();img.onerror=()=>reject(new Error("Please choose a valid PNG or JPG picture."));img.onload=()=>{const canvas=document.createElement("canvas");canvas.width=256;canvas.height=256;const ctx=canvas.getContext("2d")!;const side=Math.min(img.naturalWidth,img.naturalHeight);const sx=(img.naturalWidth-side)/2,sy=(img.naturalHeight-side)/2;ctx.drawImage(img,sx,sy,side,side,0,0,256,256);resolve(canvas.toDataURL("image/png"));};img.src=String(reader.result);};reader.readAsDataURL(file);});
+}
+
+function imageToPng(source:string):Promise<string>{
+  if(source.startsWith("data:image/png"))return Promise.resolve(source);
+  return new Promise((resolve,reject)=>{const img=new Image();img.crossOrigin="anonymous";img.onerror=()=>reject(new Error("The token picture could not be prepared for Owlbear."));img.onload=()=>{const canvas=document.createElement("canvas");canvas.width=256;canvas.height=256;const ctx=canvas.getContext("2d")!;ctx.drawImage(img,0,0,256,256);resolve(canvas.toDataURL("image/png"));};img.src=source;});
 }
 
 function editCombatant(c: Combatant): void {
