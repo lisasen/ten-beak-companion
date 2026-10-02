@@ -81,7 +81,7 @@ function spawnView(): string {
       <label>Max HP <small id="hp-rule">Heroes: 200–300</small><input name="hp" required type="number" min="200" max="300" value="250"></label></div>
       <label>Choose a pictured token</label><div class="token-picker">${["knight","dwarf","mage","beast","skull","crown"].map((t,i)=>`<label><input type="radio" name="token" value="${t}" ${i===0?"checked":""}><img src="${tokenUrl(t)}" alt="${t}"><span>${t}</span></label>`).join("")}</div>
       <div class="row"><label>How many?<input name="count" type="number" min="1" max="12" value="1"></label><label>Starting gold<input name="gold" type="number" min="0" value="300"></label></div>
-      <details><summary>Starting abilities (optional, max 3)</summary>
+      <details><summary id="ability-summary">Starting attacks / abilities (optional, max 3)</summary>
         ${[1,2,3,4].map((n) => `<fieldset class="ability"><legend>Attack / Ability ${n}</legend><input name="ability${n}" placeholder="Name"><input name="faces${n}" placeholder="Successful action-die faces, e.g. 2,4"><select name="damageMode${n}"><option value="normal">Roll damage die (10–100)</option><option value="double">Double the damage die (max 200)</option><option value="fixed">Fixed damage</option><option value="support">No damage / support ability</option></select><input name="max${n}" type="number" min="0" max="200" placeholder="Fixed or maximum damage"></fieldset>`).join("")}
       </details>
       <label class="check"><input name="saveTemplate" type="checkbox"> Save in my opponent library</label>
@@ -152,6 +152,8 @@ function configureCreator(e: Event): void {
   if(rule)rule.textContent=`Allowed: ${limits.min.toLocaleString()}–${limits.max.toLocaleString()}`;
   const limit=category==="enemy"?2:(["hero","ally"].includes(category)?3:4);
   document.querySelectorAll<HTMLElement>("fieldset.ability").forEach((field,index)=>field.hidden=index>=limit);
+  const summary=document.querySelector<HTMLElement>("#ability-summary"); if(summary)summary.textContent=`Starting attacks / abilities (optional, max ${limit})`;
+  const gold=document.querySelector<HTMLInputElement>('#creator input[name="gold"]'); if(gold){const player=["hero","ally"].includes(category);gold.disabled=!player;gold.value=player?"300":"0";}
 }
 
 function awardGold(hero: Combatant): void {
