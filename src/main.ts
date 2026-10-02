@@ -1,7 +1,7 @@
-import OBR from "@owlbear-rodeo/sdk";
+import OBR, { buildImage } from "@owlbear-rodeo/sdk";
 import "./style.css";
 import {
-  DAMAGE_FACES, LEVEL_DAMAGE, applyDeathPenalty, applyUpgrade, dealDamage, makeCombatant,
+  DAMAGE_FACES, HP_LIMITS, LEVEL_DAMAGE, applyDeathPenalty, applyUpgrade, dealDamage, makeCombatant,
   markAdventureAction, revive, spawnMany, stayAtInn,
   type Category, type Combatant, type UpgradeKind
 } from "./game";
@@ -19,6 +19,7 @@ const heroes = () => state.combatants.filter((c) => c.category === "hero" || c.c
 const enemies = () => state.combatants.filter((c) => !["hero", "ally"].includes(c.category));
 const byId = (id: string) => state.combatants.find((c) => c.id === id);
 const log = (message: string) => state.log.push(message);
+const tokenUrl = (token: string) => new URL(`tokens/${token}.svg`, window.location.href).toString();
 
 async function commit(): Promise<void> {
   await saveState(state, inOwlbear);
@@ -27,12 +28,12 @@ async function commit(): Promise<void> {
 
 function badge(c: Combatant): string {
   const pct = Math.max(0, Math.round(c.hp / c.maxHp * 100));
-  return `<article class="card ${c.defeated ? "dead" : ""}">
-    <div class="token token-${esc(c.token)}">${esc(c.name.slice(0, 1).toUpperCase())}</div>
+  return `<article class="card ${c.defeated ? "dead" : ""}" data-edit="${c.id}">
+    <div class="token"><img src="${tokenUrl(c.token)}" alt=""></div>
     <div class="card-main"><div class="card-title"><strong>${esc(c.name)}</strong><span>${esc(c.category)}</span></div>
     <div class="bar"><i style="width:${pct}%"></i></div>
     <div class="stats"><b>${c.hp}/${c.maxHp} HP</b><span>${c.gold} gold</span><span>${c.damageProgress}/${LEVEL_DAMAGE}</span></div></div>
-    ${isGm ? `<button class="icon danger" data-remove="${c.id}" title="Remove">×</button>` : ""}
+    ${isGm ? `<div class="card-actions">${["hero","ally"].includes(c.category) ? `<button data-gold="${c.id}" title="Award quest or treasure gold">+ Gold</button>` : ""}<button data-manage="${c.id}" title="Manage character">⚙</button><button class="icon danger" data-remove="${c.id}" title="Remove">×</button></div>` : ""}
   </article>`;
 }
 
@@ -52,14 +53,15 @@ function selectOptions(list: Combatant[], selected: string): string {
 }
 
 function battleView(): string {
-  const attacker = byId(state.activeAttackerId) ?? heroes().find((c) => !c.defeated);
-  const target = byId(state.activeTargetId) ?? enemies().find((c) => !c.defeated);
+  const living = state.combatants.filter((c) => !c.defeated);
+  const attacker = byId(state.activeAttackerId) ?? living[0];
+  const opposing = attacker && ["hero","ally"].includes(attacker.category) ? enemies() : heroes();
+  const target = opposing.find((c) => c.id === state.activeTargetId && !c.defeated) ?? opposing.find((c) => !c.defeated);
   if (attacker) state.activeAttackerId = attacker.id;
   if (target) state.activeTargetId = target.id;
   return `<section>
     <div class="notice">Roll the physical dice. Enter only the result—this companion never rolls for you.</div>
-    <label>Attacker<select id="attacker">${selectOptions(heroes().filter((c) => !c.defeated), state.activeAttackerId)}</select></label>
-    <label>Target<select id="target">${selectOptions(enemies().filter((c) => !c.defeated), state.activeTargetId)}</select></label>
+    <div class="duel"><label><span>⚔ Attacker</span><select id="attacker">${selectOptions(living, state.activeAttackerId)}</select></label><b>VS</b><label><span>Target</span><select id="target">${selectOptions(opposing.filter((c) => !c.defeated), state.activeTargetId)}</select></label></div>
     <h2>Damage die</h2><div class="damage-grid">${DAMAGE_FACES.map((n) => `<button class="damage" data-damage="${n}" ${!isGm ? "disabled" : ""}>${n}</button>`).join("")}</div>
     <form id="custom-damage" class="inline"><input name="damage" type="number" min="1" max="999" placeholder="Custom / doubled"><button ${!isGm ? "disabled" : ""}>Apply</button></form>
     <div class="battle-tools">
@@ -76,11 +78,11 @@ function spawnView(): string {
       <div class="section-head"><h2>New character or opponent</h2></div>
       <label>Name<input name="name" required maxlength="40" placeholder="King Earnur"></label>
       <div class="row"><label>Type<select name="category"><option value="hero">Hero</option><option value="ally">Ally</option><option value="enemy">Enemy — 50 gold</option><option value="army">Army — 150 gold</option><option value="miniBoss">Mini-boss — 300 gold</option><option value="phantome">Calamity Phantomé — ends game</option></select></label>
-      <label>Max HP<input name="hp" required type="number" min="1" max="999" value="250"></label></div>
-      <label>Token<select name="token"><option value="knight">Knight</option><option value="dwarf">Dwarf</option><option value="mage">Mage</option><option value="beast">Beast</option><option value="skull">Skull</option><option value="crown">Crown</option></select></label>
+      <label>Max HP <small id="hp-rule">Heroes: 200–300</small><input name="hp" required type="number" min="200" max="300" value="250"></label></div>
+      <label>Choose a pictured token</label><div class="token-picker">${["knight","dwarf","mage","beast","skull","crown"].map((t,i)=>`<label><input type="radio" name="token" value="${t}" ${i===0?"checked":""}><img src="${tokenUrl(t)}" alt="${t}"><span>${t}</span></label>`).join("")}</div>
       <div class="row"><label>How many?<input name="count" type="number" min="1" max="12" value="1"></label><label>Starting gold<input name="gold" type="number" min="0" value="300"></label></div>
       <details><summary>Starting abilities (optional, max 3)</summary>
-        ${[1,2,3].map((n) => `<fieldset><legend>Ability ${n}</legend><input name="ability${n}" placeholder="Name"><input name="faces${n}" placeholder="Success faces, e.g. 2,4,6"><input name="max${n}" type="number" min="0" max="200" placeholder="Maximum damage"></fieldset>`).join("")}
+        ${[1,2,3,4].map((n) => `<fieldset class="ability"><legend>Attack / Ability ${n}</legend><input name="ability${n}" placeholder="Name"><input name="faces${n}" placeholder="Successful action-die faces, e.g. 2,4"><select name="damageMode${n}"><option value="normal">Roll damage die (10–100)</option><option value="double">Double the damage die (max 200)</option><option value="fixed">Fixed damage</option><option value="support">No damage / support ability</option></select><input name="max${n}" type="number" min="0" max="200" placeholder="Fixed or maximum damage"></fieldset>`).join("")}
       </details>
       <label class="check"><input name="saveTemplate" type="checkbox"> Save in my opponent library</label>
       <button class="primary" ${!isGm ? "disabled" : ""}>Create & spawn</button>
@@ -97,16 +99,18 @@ function render(): void {
 
 function bind(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) => b.onclick = () => { activeTab = b.dataset.tab as typeof activeTab; render(); });
-  document.querySelector<HTMLSelectElement>("#attacker")?.addEventListener("change", (e) => { state.activeAttackerId = (e.target as HTMLSelectElement).value; void commit(); });
+  document.querySelector<HTMLSelectElement>("#attacker")?.addEventListener("change", (e) => { state.activeAttackerId = (e.target as HTMLSelectElement).value; const a=byId(state.activeAttackerId); const targets=a&&["hero","ally"].includes(a.category)?enemies():heroes(); state.activeTargetId=targets.find(c=>!c.defeated)?.id??""; void commit(); });
   document.querySelector<HTMLSelectElement>("#target")?.addEventListener("change", (e) => { state.activeTargetId = (e.target as HTMLSelectElement).value; void commit(); });
   document.querySelectorAll<HTMLButtonElement>("[data-damage]").forEach((b) => b.onclick = () => void applyDamage(Number(b.dataset.damage)));
   document.querySelector<HTMLFormElement>("#custom-damage")?.addEventListener("submit", (e) => { e.preventDefault(); void applyDamage(Number(new FormData(e.currentTarget as HTMLFormElement).get("damage"))); });
   document.querySelector<HTMLButtonElement>("#coin")?.addEventListener("click", () => { log(Math.random() < .5 ? "Adventurers attack first." : "Enemies caught them off guard and attack first."); void commit(); });
   document.querySelector<HTMLButtonElement>("#retreat")?.addEventListener("click", () => { const roll = prompt("What did the physical action die show? (Retreat succeeds on 2 or 3)"); if (!roll) return; log([2,3].includes(Number(roll)) ? `Retreat succeeds on ${roll}.` : `Retreat fails on ${roll}; it is now the enemy turn.`); void commit(); });
   document.querySelector<HTMLFormElement>("#creator")?.addEventListener("submit", create);
-  document.querySelectorAll<HTMLButtonElement>("[data-template]").forEach((b) => b.onclick = () => { const copies = Number(prompt("How many should spawn?", "1")); if (!copies) return; state.combatants.push(...spawnMany(templates[Number(b.dataset.template)], copies)); log(`GM spawned ${copies} × ${templates[Number(b.dataset.template)].name}.`); void commit(); });
+  document.querySelectorAll<HTMLButtonElement>("[data-template]").forEach((b) => b.onclick = async () => { const copies = Number(prompt("How many should spawn?", "1")); if (!copies) return; const spawned=spawnMany(templates[Number(b.dataset.template)], copies); state.combatants.push(...spawned); await placeOnMap(spawned); log(`GM spawned ${copies} × ${templates[Number(b.dataset.template)].name}.`); await commit(); });
   document.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((b) => b.onclick = () => { const c = byId(b.dataset.remove!); if (c && confirm(`Remove ${c.name}?`)) { state.combatants = state.combatants.filter((x) => x.id !== c.id); void commit(); } });
-  document.querySelectorAll<HTMLElement>(".card").forEach((card, index) => card.ondblclick = () => editCombatant(state.combatants[index]));
+  document.querySelectorAll<HTMLButtonElement>("[data-manage]").forEach((b)=>b.onclick=()=>{const c=byId(b.dataset.manage!);if(c)editCombatant(c);});
+  document.querySelectorAll<HTMLButtonElement>("[data-gold]").forEach((b)=>b.onclick=()=>{const c=byId(b.dataset.gold!);if(c)awardGold(c);});
+  document.querySelector<HTMLSelectElement>('#creator select[name="category"]')?.addEventListener("change", configureCreator);
 }
 
 async function applyDamage(amount: number): Promise<void> {
@@ -115,7 +119,7 @@ async function applyDamage(amount: number): Promise<void> {
     if (!attacker || !target) throw new Error("Choose an attacker and target first.");
     const result = dealDamage(attacker, target, amount);
     markAdventureAction(attacker);
-    log(`${attacker.name} dealt ${result.actualDamage} damage to ${target.name}.`);
+    log(`${attacker.name} dealt ${result.actualDamage} damage to ${target.name}${result.blockedDamage ? ` (${result.blockedDamage} blocked by armor)` : ""}.`);
     if (result.reward) log(`${attacker.name} made the final blow and looted ${result.reward} gold.`);
     if (result.newLevels) log(`${attacker.name} earned ${result.newLevels} upgrade choice${result.newLevels > 1 ? "s" : ""}!`);
     if (result.gameWon) state.gameWon = true;
@@ -123,20 +127,46 @@ async function applyDamage(amount: number): Promise<void> {
   } catch (error) { alert((error as Error).message); }
 }
 
-function create(e: SubmitEvent): void {
+async function create(e: SubmitEvent): Promise<void> {
   e.preventDefault();
   try {
     const data = new FormData(e.currentTarget as HTMLFormElement);
     const category = String(data.get("category")) as Category;
-    const abilities = [1,2,3].flatMap((n) => {
+    const abilities = [1,2,3,4].flatMap((n) => {
       const name = String(data.get(`ability${n}`) ?? "").trim(); if (!name) return [];
-      return [{ id: crypto.randomUUID(), name, successFaces: String(data.get(`faces${n}`)).split(",").map(Number).filter(Boolean), effect: "Roll the damage die", maxDamage: Number(data.get(`max${n}`) || 100) }];
+      const mode=String(data.get(`damageMode${n}`)); const defaults:Record<string,number>={normal:100,double:200,fixed:50,support:0};
+      const effects:Record<string,string>={normal:"Roll the damage die",double:"Roll and double the damage die",fixed:"Deal fixed damage",support:"Support ability—no damage"};
+      return [{ id: crypto.randomUUID(), name, successFaces: String(data.get(`faces${n}`)).split(",").map(Number).filter(Boolean), effect: effects[mode], maxDamage: Number(data.get(`max${n}`) || defaults[mode]) }];
     });
-    const base = makeCombatant({ name: String(data.get("name")), category, maxHp: Number(data.get("hp")), gold: Number(data.get("gold")), token: String(data.get("token")), abilities });
+    const base = makeCombatant({ name: String(data.get("name")), category, maxHp: Number(data.get("hp")), gold: ["hero","ally"].includes(category) ? Number(data.get("gold")) : 0, token: String(data.get("token")), abilities });
     const spawned = spawnMany(base, Number(data.get("count")));
     if (data.get("saveTemplate")) { templates.push(base); saveTemplates(templates); }
-    state.combatants.push(...spawned); log(`GM spawned ${spawned.length} × ${base.name}.`); activeTab = "roster"; void commit();
+    state.combatants.push(...spawned); await placeOnMap(spawned); log(`GM spawned ${spawned.length} × ${base.name}.`); activeTab = "roster"; await commit();
   } catch (error) { alert((error as Error).message); }
+}
+
+function configureCreator(e: Event): void {
+  const category=(e.target as HTMLSelectElement).value as Category; const limits=HP_LIMITS[category];
+  const hp=document.querySelector<HTMLInputElement>('#creator input[name="hp"]'); const rule=document.querySelector<HTMLElement>("#hp-rule");
+  if(hp){hp.min=String(limits.min);hp.max=String(limits.max);if(Number(hp.value)<limits.min||Number(hp.value)>limits.max)hp.value=String(category==="hero"||category==="ally"?250:Math.min(250,limits.max));}
+  if(rule)rule.textContent=`Allowed: ${limits.min.toLocaleString()}–${limits.max.toLocaleString()}`;
+  const limit=category==="enemy"?2:(["hero","ally"].includes(category)?3:4);
+  document.querySelectorAll<HTMLElement>("fieldset.ability").forEach((field,index)=>field.hidden=index>=limit);
+}
+
+function awardGold(hero: Combatant): void {
+  const amount=Number(prompt("Award gold: enter 25, 50, 100, or a custom amount", "50")); if(!Number.isFinite(amount)||amount<=0)return;
+  const reason=(prompt("Reason for the reward", "Quest, chest, or gift")??"GM reward").trim(); hero.gold+=Math.floor(amount); log(`GM awarded ${hero.name} ${Math.floor(amount)} gold — ${reason}.`); void commit();
+}
+
+async function placeOnMap(combatants: Combatant[]): Promise<void> {
+  if(!inOwlbear || !(await OBR.scene.isReady())) return;
+  const [width,height]=await Promise.all([OBR.viewport.getWidth(),OBR.viewport.getHeight()]);
+  const center=await OBR.viewport.inverseTransformPoint({x:width/2,y:height/2});
+  const items=combatants.map((c,index)=>buildImage({url:tokenUrl(c.token),mime:"image/svg+xml",width:256,height:256},{dpi:150,offset:{x:0,y:0}})
+    .name(c.name).layer("CHARACTER").position({x:center.x+(index%4)*180,y:center.y+Math.floor(index/4)*180})
+    .metadata({"com.tenbeak.companion/combatantId":c.id,"com.tenbeak.companion/encounterId":c.encounterId}).build());
+  await OBR.scene.items.addItems(items);
 }
 
 function editCombatant(c: Combatant): void {

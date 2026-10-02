@@ -1,5 +1,9 @@
 export const DAMAGE_FACES = [10, 20, 30, 40, 50, 100] as const;
 export const LEVEL_DAMAGE = 750;
+export const HP_LIMITS: Record<Category, { min: number; max: number }> = {
+  hero: { min: 200, max: 300 }, ally: { min: 200, max: 300 }, enemy: { min: 1, max: 500 },
+  army: { min: 1, max: 1000 }, miniBoss: { min: 1, max: 1500 }, phantome: { min: 1, max: 3000 }
+};
 
 export type Category = "hero" | "ally" | "enemy" | "army" | "miniBoss" | "phantome";
 export type UpgradeKind = "vitality" | "power" | "accuracy" | "armor" | "fortune" | "ability";
@@ -42,6 +46,7 @@ export interface DamageResult {
   reward: number;
   newLevels: number;
   gameWon: boolean;
+  blockedDamage: number;
 }
 
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -54,11 +59,10 @@ export function rewardFor(category: Category): number {
 }
 
 export function makeCombatant(input: Partial<Combatant> & Pick<Combatant, "name" | "category" | "maxHp">): Combatant {
-  if (["hero", "ally"].includes(input.category) && (input.maxHp < 200 || input.maxHp > 300)) {
-    throw new Error("Player max HP must be between 200 and 300.");
-  }
-  if (input.maxHp < 1) throw new Error("Max HP must be positive.");
-  if ((input.abilities?.length ?? 0) > 3) throw new Error("A new player can have at most 3 abilities.");
+  const limits = HP_LIMITS[input.category];
+  if (input.maxHp < limits.min || input.maxHp > limits.max) throw new Error(`${input.name} HP must be between ${limits.min} and ${limits.max}.`);
+  const abilityLimit = input.category === "enemy" ? 2 : (["hero", "ally"].includes(input.category) ? 3 : 4);
+  if ((input.abilities?.length ?? 0) > abilityLimit) throw new Error(`${input.name} can have at most ${abilityLimit} attacks or abilities.`);
   for (const ability of input.abilities ?? []) validateAbility(ability);
 
   return {
@@ -97,13 +101,16 @@ export function dealDamage(attacker: Combatant, target: Combatant, rolledDamage:
   if (target.defeated || target.hp <= 0) throw new Error("That opponent is already defeated.");
   if (!Number.isFinite(rolledDamage) || rolledDamage <= 0) throw new Error("Damage must be greater than 0.");
 
-  const actualDamage = Math.min(target.hp, Math.floor(rolledDamage));
+  const hasArmor = target.upgrades.some((upgrade) => upgrade.kind === "armor");
+  const blockedDamage = hasArmor ? Math.min(25, Math.floor(rolledDamage)) : 0;
+  const actualDamage = Math.min(target.hp, Math.max(0, Math.floor(rolledDamage) - blockedDamage));
   const hpBefore = target.hp;
   target.hp -= actualDamage;
-  attacker.damageProgress += actualDamage;
+  const heroicAttack = ["hero", "ally"].includes(attacker.category);
+  if (heroicAttack) attacker.damageProgress += actualDamage;
 
   let newLevels = 0;
-  while (attacker.damageProgress >= LEVEL_DAMAGE) {
+  while (heroicAttack && attacker.damageProgress >= LEVEL_DAMAGE) {
     attacker.damageProgress -= LEVEL_DAMAGE;
     attacker.pendingUpgrades += 1;
     newLevels += 1;
@@ -113,14 +120,14 @@ export function dealDamage(attacker: Combatant, target: Combatant, rolledDamage:
   let reward = 0;
   if (killed) {
     target.defeated = true;
-    if (!target.rewarded) {
+    if (heroicAttack && !["hero", "ally"].includes(target.category) && !target.rewarded) {
       reward = rewardFor(target.category);
       attacker.gold += reward;
       target.rewarded = true;
     }
   }
 
-  return { actualDamage, killed, reward, newLevels, gameWon: killed && target.category === "phantome" };
+  return { actualDamage, killed, reward, newLevels, gameWon: killed && target.category === "phantome", blockedDamage };
 }
 
 export function spawnMany(template: Combatant, count: number): Combatant[] {
