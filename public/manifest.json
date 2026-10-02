@@ -6,8 +6,8 @@
   "description": "Character, battle, rewards, leveling, and encounter tools for The Ten Beak.",
   "action": {
     "title": "The Ten Beak",
-    "icon": "/icon.svg",
-    "popover": "/",
+    "icon": "https://lisasen.github.io/ten-beak-companion/icon.svg",
+    "popover": "https://lisasen.github.io/ten-beak-companion/",
     "height": 700,
     "width": 440
   }
