@@ -1,0 +1,14 @@
+{
+  "name": "The Ten Beak Companion",
+  "version": "0.1.0",
+  "manifest_version": 1,
+  "author": "Ved",
+  "description": "Character, battle, rewards, leveling, and encounter tools for The Ten Beak.",
+  "action": {
+    "title": "The Ten Beak",
+    "icon": "/icon.svg",
+    "popover": "/",
+    "height": 700,
+    "width": 440
+  }
+}
