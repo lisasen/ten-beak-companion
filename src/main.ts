@@ -1,4 +1,4 @@
-import OBR, { buildImage } from "@owlbear-rodeo/sdk";
+import OBR from "@owlbear-rodeo/sdk";
 import "./style.css";
 import {
   DAMAGE_FACES, HP_LIMITS, LEVEL_DAMAGE, applyDeathPenalty, applyUpgrade, dealDamage, makeCombatant,
@@ -43,7 +43,7 @@ function badge(c: Combatant): string {
 }
 
 function nav(): string {
-  return `<nav>${(["roster", "battle", "spawn"] as const).map((tab) => `<button data-tab="${tab}" class="${activeTab === tab ? "active" : ""}">${tab === "spawn" ? "Create & Spawn" : tab}</button>`).join("")}</nav>`;
+  return `<nav>${(["roster", "battle", "spawn"] as const).map((tab) => `<button data-tab="${tab}" class="${activeTab === tab ? "active" : ""}">${tab === "spawn" ? "Create" : tab}</button>`).join("")}</nav>`;
 }
 
 function rosterView(): string {
@@ -91,7 +91,7 @@ function spawnView(): string {
         ${[1,2,3,4].map((n) => `<fieldset class="ability"><legend>Attack / Ability ${n}</legend><input name="ability${n}" placeholder="Name"><input name="faces${n}" placeholder="Successful action-die faces, e.g. 2,4"><select name="damageMode${n}"><option value="normal">Roll damage die (10–100)</option><option value="double">Double the damage die (max 200)</option><option value="fixed">Fixed damage</option><option value="support">No damage / support ability</option></select><input name="max${n}" type="number" min="0" max="200" placeholder="Fixed or maximum damage"></fieldset>`).join("")}
       </details>
       <label class="check"><input name="saveTemplate" type="checkbox"> Save in my opponent library</label>
-      <button class="primary" ${!isGm ? "disabled" : ""}>Create & spawn</button>
+      <button class="primary" ${!isGm ? "disabled" : ""}>Create character / opponent</button>
     </form>
     <div class="section-head"><h2>Saved library</h2><span>${templates.length}</span></div>
     <div class="template-grid">${templates.map((t, i) => `<button data-template="${i}" ${!isGm ? "disabled" : ""}><b>${esc(t.name)}</b><small>${esc(t.category)} · ${t.maxHp} HP</small></button>`).join("") || `<p class="empty">Save an opponent once, then spawn it again in one click.</p>`}</div>
@@ -112,7 +112,7 @@ function bind(): void {
   document.querySelector<HTMLButtonElement>("#coin")?.addEventListener("click", () => { log(Math.random() < .5 ? "Adventurers attack first." : "Enemies caught them off guard and attack first."); void commit(); });
   document.querySelector<HTMLButtonElement>("#retreat")?.addEventListener("click", () => { const roll = prompt("What did the physical action die show? (Retreat succeeds on 2 or 3)"); if (!roll) return; log([2,3].includes(Number(roll)) ? `Retreat succeeds on ${roll}.` : `Retreat fails on ${roll}; it is now the enemy turn.`); void commit(); });
   document.querySelector<HTMLFormElement>("#creator")?.addEventListener("submit", create);
-  document.querySelectorAll<HTMLButtonElement>("[data-template]").forEach((b) => b.onclick = async () => { const copies = Number(prompt("How many should spawn?", "1")); if (!copies) return; const spawned=spawnMany(templates[Number(b.dataset.template)], copies); state.combatants.push(...spawned); await placeOnMap(spawned); log(`GM spawned ${copies} × ${templates[Number(b.dataset.template)].name}.`); await commit(); });
+  document.querySelectorAll<HTMLButtonElement>("[data-template]").forEach((b) => b.onclick = async () => { const copies = Number(prompt("How many should be created?", "1")); if (!copies) return; const spawned=spawnMany(templates[Number(b.dataset.template)], copies); state.combatants.push(...spawned); log(`GM created ${copies} × ${templates[Number(b.dataset.template)].name}.`); await commit(); });
   document.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((b) => b.onclick = () => { const c = byId(b.dataset.remove!); if (c && confirm(`Remove ${c.name}?`)) { state.combatants = state.combatants.filter((x) => x.id !== c.id); void commit(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-manage]").forEach((b)=>b.onclick=()=>{const c=byId(b.dataset.manage!);if(c)editCombatant(c);});
   document.querySelectorAll<HTMLButtonElement>("[data-gold]").forEach((b)=>b.onclick=()=>{const c=byId(b.dataset.gold!);if(c)awardGold(c);});
@@ -148,7 +148,7 @@ async function create(e: SubmitEvent): Promise<void> {
     const base = makeCombatant({ name: String(data.get("name")), category, maxHp: Number(data.get("hp")), gold: ["hero","ally"].includes(category) ? Number(data.get("gold")) : 0, token: String(data.get("token")), abilities });
     const spawned = spawnMany(base, Number(data.get("count")));
     if (data.get("saveTemplate")) { templates.push(base); saveTemplates(templates); }
-    state.combatants.push(...spawned); await placeOnMap(spawned); log(`GM spawned ${spawned.length} × ${base.name}.`); activeTab = "roster"; await commit();
+    state.combatants.push(...spawned); log(`GM created ${spawned.length} × ${base.name}. Place map tokens manually.`); activeTab = "roster"; await commit();
   } catch (error) { alert((error as Error).message); }
 }
 
@@ -168,17 +168,6 @@ function awardGold(hero: Combatant): void {
   const reason=(prompt("Reason for the reward", "Quest, chest, or gift")??"GM reward").trim(); hero.gold+=Math.floor(amount); log(`GM awarded ${hero.name} ${Math.floor(amount)} gold — ${reason}.`); void commit();
 }
 
-async function placeOnMap(combatants: Combatant[]): Promise<void> {
-  if(!inOwlbear || !(await OBR.scene.isReady())) return;
-  const [width,height]=await Promise.all([OBR.viewport.getWidth(),OBR.viewport.getHeight()]);
-  const center=await OBR.viewport.inverseTransformPoint({x:width/2,y:height/2});
-  const pngs=await Promise.all(combatants.map(c=>imageToPng(tokenUrl(c.token))));
-  const items=combatants.map((c,index)=>buildImage({url:pngs[index],mime:"image/png",width:256,height:256},{dpi:150,offset:{x:0,y:0}})
-    .name(c.name).layer("CHARACTER").position({x:center.x+(index%4)*180,y:center.y+Math.floor(index/4)*180})
-    .metadata({"com.tenbeak.companion/combatantId":c.id,"com.tenbeak.companion/encounterId":c.encounterId}).build());
-  await OBR.scene.items.addItems(items);
-}
-
 async function uploadToken(e:Event):Promise<void>{
   const input=e.target as HTMLInputElement; const file=input.files?.[0]; if(!file)return;
   if(file.size>8_000_000){alert("Please choose an image smaller than 8 MB.");return;}
@@ -193,11 +182,6 @@ async function uploadToken(e:Event):Promise<void>{
 
 function fileToSquarePng(file:File):Promise<string>{
   return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error("That picture could not be read."));reader.onload=()=>{const img=new Image();img.onerror=()=>reject(new Error("Please choose a valid PNG or JPG picture."));img.onload=()=>{const canvas=document.createElement("canvas");canvas.width=256;canvas.height=256;const ctx=canvas.getContext("2d")!;const side=Math.min(img.naturalWidth,img.naturalHeight);const sx=(img.naturalWidth-side)/2,sy=(img.naturalHeight-side)/2;ctx.drawImage(img,sx,sy,side,side,0,0,256,256);resolve(canvas.toDataURL("image/png"));};img.src=String(reader.result);};reader.readAsDataURL(file);});
-}
-
-function imageToPng(source:string):Promise<string>{
-  if(source.startsWith("data:image/png"))return Promise.resolve(source);
-  return new Promise((resolve,reject)=>{const img=new Image();img.crossOrigin="anonymous";img.onerror=()=>reject(new Error("The token picture could not be prepared for Owlbear."));img.onload=()=>{const canvas=document.createElement("canvas");canvas.width=256;canvas.height=256;const ctx=canvas.getContext("2d")!;ctx.drawImage(img,0,0,256,256);resolve(canvas.toDataURL("image/png"));};img.src=source;});
 }
 
 function editCombatant(c: Combatant): void {
